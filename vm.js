@@ -1,12 +1,13 @@
-/** **nodejs 'vm' core module.**
+/** 'vm' nodejs core module browserify-ied with `--standalone vm`. Should support all module systems (commonjs, AMD & `window.vm`) - check browserify docs.
 
 From [node2web](http://github.com/anodynos/node2web) collection,
-via [browserify-CDN](http://wzrd.in/),
-exposed as 'vm' to [bower](http://bower.io) for *browser* usage.
+should/will be exposed as 'vm' to [bower](http://bower.io) for *browser* usage.
 
-Latest [browserify-CDN](http://wzrd.in/) reported **version: 'v0.10.12'** 
+browserify version: '3.24.10', build date 'Sun Feb 02 2014 23:27:08 GMT+0200 (EET)' 
 **/
-!function(e){"object"==typeof exports?module.exports=e():"function"==typeof define&&define.amd?define(e):"undefined"!=typeof window?window.vm=e():"undefined"!=typeof global?global.vm=e():"undefined"!=typeof self&&(self.vm=e())}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);throw new Error("Cannot find module '"+o+"'")}var f=n[o]={exports:{}};t[o][0].call(f.exports,function(e){var n=t[o][1][e];return s(n?n:e)},f,f.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+!function(e){if("object"==typeof exports)module.exports=e();else if("function"==typeof define&&define.amd)define(e);else{var f;"undefined"!=typeof window?f=window:"undefined"!=typeof global?f=global:"undefined"!=typeof self&&(f=self),f.vm=e()}}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);throw new Error("Cannot find module '"+o+"'")}var f=n[o]={exports:{}};t[o][0].call(f.exports,function(e){var n=t[o][1][e];return s(n?n:e)},f,f.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(_dereq_,module,exports){
+var indexOf = _dereq_('indexof');
+
 var Object_keys = function (obj) {
     if (Object.keys) return Object.keys(obj)
     else {
@@ -23,13 +24,42 @@ var forEach = function (xs, fn) {
     }
 };
 
+var defineProp = (function() {
+    try {
+        Object.defineProperty({}, '_', {});
+        return function(obj, name, value) {
+            Object.defineProperty(obj, name, {
+                writable: true,
+                enumerable: false,
+                configurable: true,
+                value: value
+            })
+        };
+    } catch(e) {
+        return function(obj, name, value) {
+            obj[name] = value;
+        };
+    }
+}());
+
+var globals = ['Array', 'Boolean', 'Date', 'Error', 'EvalError', 'Function',
+'Infinity', 'JSON', 'Math', 'NaN', 'Number', 'Object', 'RangeError',
+'ReferenceError', 'RegExp', 'String', 'SyntaxError', 'TypeError', 'URIError',
+'decodeURI', 'decodeURIComponent', 'encodeURI', 'encodeURIComponent', 'escape',
+'eval', 'isFinite', 'isNaN', 'parseFloat', 'parseInt', 'undefined', 'unescape'];
+
+function Context() {}
+Context.prototype = {};
+
 var Script = exports.Script = function NodeScript (code) {
     if (!(this instanceof Script)) return new Script(code);
     this.code = code;
 };
 
-Script.prototype.runInNewContext = function (context) {
-    if (!context) context = {};
+Script.prototype.runInContext = function (context) {
+    if (!(context instanceof Context)) {
+        throw new TypeError("needs a 'context' argument.");
+    }
     
     var iframe = document.createElement('iframe');
     if (!iframe.style) iframe.style = {};
@@ -38,20 +68,40 @@ Script.prototype.runInNewContext = function (context) {
     document.body.appendChild(iframe);
     
     var win = iframe.contentWindow;
+    var wEval = win.eval, wExecScript = win.execScript;
+
+    if (!wEval && wExecScript) {
+        // win.eval() magically appears when this is called in IE:
+        wExecScript.call(win, 'null');
+        wEval = win.eval;
+    }
     
     forEach(Object_keys(context), function (key) {
         win[key] = context[key];
     });
-     
-    if (!win.eval && win.execScript) {
-        // win.eval() magically appears when this is called in IE:
-        win.execScript('null');
-    }
+    forEach(globals, function (key) {
+        if (context[key]) {
+            win[key] = context[key];
+        }
+    });
     
-    var res = win.eval(this.code);
+    var winKeys = Object_keys(win);
+
+    var res = wEval.call(win, this.code);
     
     forEach(Object_keys(win), function (key) {
-        context[key] = win[key];
+        // Avoid copying circular objects like `top` and `window` by only
+        // updating existing context properties or new properties in the `win`
+        // that was only introduced after the eval.
+        if (key in context || indexOf(winKeys, key) === -1) {
+            context[key] = win[key];
+        }
+    });
+
+    forEach(globals, function (key) {
+        if (!(key in context)) {
+            defineProp(context, key, win[key]);
+        }
     });
     
     document.body.removeChild(iframe);
@@ -63,11 +113,15 @@ Script.prototype.runInThisContext = function () {
     return eval(this.code); // maybe...
 };
 
-Script.prototype.runInContext = function (context) {
-    // seems to be just runInNewContext on magical context objects which are
-    // otherwise indistinguishable from objects except plain old objects
-    // for the parameter segfaults node
-    return this.runInNewContext(context);
+Script.prototype.runInNewContext = function (context) {
+    var ctx = Script.createContext(context);
+    var res = this.runInContext(ctx);
+
+    forEach(Object_keys(ctx), function (key) {
+        context[key] = ctx[key];
+    });
+
+    return res;
 };
 
 forEach(Object_keys(Script.prototype), function (name) {
@@ -82,9 +136,7 @@ exports.createScript = function (code) {
 };
 
 exports.createContext = Script.createContext = function (context) {
-    // not really sure what this one does
-    // seems to just make a shallow copy
-    var copy = {};
+    var copy = new Context();
     if(typeof context === 'object') {
         forEach(Object_keys(context), function (key) {
             copy[key] = context[key];
@@ -93,7 +145,19 @@ exports.createContext = Script.createContext = function (context) {
     return copy;
 };
 
-},{}]},{},[1])
-(1)
+},{"indexof":2}],2:[function(_dereq_,module,exports){
+
+var indexOf = [].indexOf;
+
+module.exports = function(arr, obj){
+  if (indexOf) return arr.indexOf(obj);
+  for (var i = 0; i < arr.length; ++i) {
+    if (arr[i] === obj) return i;
+  }
+  return -1;
+};
+},{}],3:[function(_dereq_,module,exports){
+module.exports = _dereq_('vm');
+},{"vm":1}]},{},[3])
+(3)
 });
-;
