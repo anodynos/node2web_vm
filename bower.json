@@ -1,6 +1,6 @@
 {
  "name": "vm",
- "version": "3.24.10",
+ "version": "3.46.1",
  "main": "vm.min.js",
  "description": "'vm' nodejs core module browserify-ied with `--standalone vm`. Should support all module systems (commonjs, AMD & `window.vm`) - check browserify docs.",
  "keywords": [
